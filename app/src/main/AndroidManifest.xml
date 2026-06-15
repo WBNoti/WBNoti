@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Required for BLE scanning on Android 11 (API 30) and below -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" android:maxSdkVersion="32" />
+    <!-- READ_BASIC_PHONE_STATE is sufficient for call-state detection on API 33+ -->
+    <uses-permission android:name="android.permission.READ_BASIC_PHONE_STATE" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.Slack" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.android.mms" />
+        <package android:name="com.samsung.android.messaging" />
+        <package android:name="com.android.dialer" />
+        <package android:name="com.google.android.dialer" />
+        <package android:name="com.samsung.android.dialer" />
+        <package android:name="com.google.android.calendar" />
+        <package android:name="com.samsung.android.calendar" />
+        <package android:name="com.ringapp" />
+    </queries>
+
+    <application
+        android:label="WBNoti"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.WBNoti"
+        android:allowBackup="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".NotificationService"
+            android:label="WBNoti"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".WBAccessibilityService"
+            android:label="WBNoti"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+
+</manifest>

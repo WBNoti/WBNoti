@@ -1,0 +1,1229 @@
+Build an Android app called **WBNoti** (package `com.wbnoti`, version 0.18, versionCode 9). The app buzzes a WHOOP 4.0 or 5.0 fitness band over BLE when the phone receives notifications. It has no server backend — everything runs on-device.
+
+---
+
+## Project structure
+
+```
+settings.gradle.kts        → rootProject.name = "WhoopNoti", include(":app")
+build.gradle.kts           → root, applies plugins (android.application, kotlin.android, kotlin.compose) with apply false
+gradle.properties          → android.useAndroidX=true, android.enableJetifier=true, org.gradle.jvmargs=-Xmx2048m
+app/build.gradle.kts       → see below
+gradle/libs.versions.toml  → see below
+app/proguard-rules.pro     → see below
+```
+
+---
+
+## `gradle/libs.versions.toml`
+
+```toml
+[versions]
+agp = "9.2.0"
+kotlin = "2.3.20"
+coreKtx = "1.19.0"
+lifecycleRuntimeKtx = "2.10.0"
+activityCompose = "1.13.0"
+composeBom = "2026.05.00"
+datastorePreferences = "1.2.1"
+junit = "4.13.2"
+kotlinxCoroutinesTest = "1.10.2"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+```
+
+---
+
+## `app/build.gradle.kts`
+
+```kotlin
+import java.util.Properties
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+}
+
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) load(f.inputStream())
+}
+
+android {
+    namespace = "com.wbnoti"
+    compileSdk = 37
+
+    defaultConfig {
+        applicationId = "com.wbnoti"
+        minSdk = 26
+        targetSdk = 37
+        versionCode = 9
+        versionName = "0.18"
+    }
+
+    signingConfigs {
+        create("release") {
+            // Local: read from keystore.properties. CI: read from environment variables.
+            storeFile = file(keystoreProps["storeFile"] as? String ?: System.getenv("SIGNING_STORE_FILE") ?: "release.jks")
+            storePassword = keystoreProps["storePassword"] as? String ?: System.getenv("SIGNING_STORE_PASSWORD") ?: ""
+            keyAlias = keystoreProps["keyAlias"] as? String ?: System.getenv("SIGNING_KEY_ALIAS") ?: ""
+            keyPassword = keystoreProps["keyPassword"] as? String ?: System.getenv("SIGNING_KEY_PASSWORD") ?: ""
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    buildFeatures {
+        compose = true
+    }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.datastore.preferences)
+    debugImplementation(libs.androidx.ui.tooling)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+}
+```
+
+---
+
+## `app/proguard-rules.pro`
+
+```
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+    public static int w(...);
+    public static int e(...);
+}
+
+-keep class com.wbnoti.NotificationService
+-keep class com.wbnoti.WBAccessibilityService
+
+-keepclassmembers class * extends androidx.datastore.preferences.protobuf.GeneratedMessageLite {
+    <fields>;
+}
+```
+
+---
+
+## `AndroidManifest.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_BASIC_PHONE_STATE" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.Slack" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.android.mms" />
+        <package android:name="com.samsung.android.messaging" />
+        <package android:name="com.android.dialer" />
+        <package android:name="com.google.android.dialer" />
+        <package android:name="com.samsung.android.dialer" />
+        <package android:name="com.google.android.calendar" />
+        <package android:name="com.samsung.android.calendar" />
+        <package android:name="com.ringapp" />
+    </queries>
+
+    <application
+        android:label="WBNoti"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.WBNoti"
+        android:allowBackup="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".NotificationService"
+            android:label="WBNoti"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".WBAccessibilityService"
+            android:label="WBNoti"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+
+</manifest>
+```
+
+---
+
+## `res/xml/accessibility_service_config.xml`
+
+```xml
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeNotificationStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagIncludeNotImportantViews"
+    android:description="@string/accessibility_description"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="false" />
+```
+
+---
+
+## `res/values/strings.xml`
+
+```xml
+<resources>
+    <string name="app_name">WBNoti</string>
+    <string name="accessibility_description">Detects notifications to buzz your WB band</string>
+</resources>
+```
+
+---
+
+## `res/values/themes.xml`
+
+Create a minimal Material3 theme named `Theme.WBNoti` inheriting from `Theme.Material3.DayNight.NoActionBar`.
+
+---
+
+## `Packages.kt`
+
+```kotlin
+package com.wbnoti
+
+val CALL_PACKAGES = setOf(
+    "com.android.dialer",
+    "com.google.android.dialer",
+    "com.samsung.android.dialer"
+)
+
+val SMS_PACKAGES = setOf(
+    "com.google.android.apps.messaging",
+    "com.android.mms",
+    "com.samsung.android.messaging"
+)
+
+val WHATSAPP_PACKAGES = setOf("com.whatsapp")
+
+val SLACK_PACKAGES = setOf("com.Slack")
+
+val CALENDAR_PACKAGES = setOf(
+    "com.google.android.calendar",
+    "com.samsung.android.calendar",
+    "com.android.calendar"
+)
+
+val ALL_MESSAGING_PACKAGES = SMS_PACKAGES + WHATSAPP_PACKAGES + SLACK_PACKAGES
+```
+
+---
+
+## `WBProtocol.kt`
+
+BLE protocol constants and packet builders for WHOOP 4.0 and 5.0.
+
+Protocol reverse-engineered from the Noop project (MIT licence): https://github.com/suyashkumar/whoop
+
+```kotlin
+package com.wbnoti
+
+import java.util.UUID
+import java.util.zip.CRC32
+
+object WBProtocol {
+    // WHOOP 4.0 BLE UUIDs
+    val SERVICE_UUID: UUID = UUID.fromString("61080001-8d6d-82b8-614a-1c8cb0f8dcc6")
+    val CMD_TO_STRAP: UUID = UUID.fromString("61080002-8d6d-82b8-614a-1c8cb0f8dcc6")
+    val CMD_FROM_STRAP: UUID = UUID.fromString("61080003-8d6d-82b8-614a-1c8cb0f8dcc6")
+
+    // WHOOP 5.0 BLE UUIDs
+    val SERVICE_UUID_5: UUID = UUID.fromString("fd4b0001-cce1-4033-93ce-002d5875f58a")
+    val CMD_TO_STRAP_5: UUID = UUID.fromString("fd4b0002-cce1-4033-93ce-002d5875f58a")
+
+    // Standard BLE Battery Service
+    val BATTERY_SERVICE_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+    val BATTERY_LEVEL_UUID: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
+
+    private const val FRAME_MAGIC: Byte = 0xAA.toByte()
+    private const val PACKET_TYPE_COMMAND: Byte = 35
+    private const val CMD_RUN_HAPTICS_PATTERN: Byte = 79      // WHOOP 4.0
+    private const val CMD_RUN_HAPTIC_MAVERICK: Byte = 0x13    // WHOOP 5.0
+
+    private fun crc8(data: ByteArray): Byte {
+        var crc = 0
+        for (b in data) {
+            crc = crc xor (b.toInt() and 0xFF)
+            repeat(8) {
+                crc = if (crc and 0x80 != 0) (crc shl 1) xor 0x07 else crc shl 1
+                crc = crc and 0xFF
+            }
+        }
+        return crc.toByte()
+    }
+
+    private fun crc32Le(data: ByteArray): ByteArray {
+        val crc = CRC32().also { it.update(data) }.value
+        return ByteArray(4) { i -> ((crc shr (i * 8)) and 0xFF).toByte() }
+    }
+
+    // WHOOP 4.0: RUN_HAPTICS_PATTERN (79), patternId=2 (graduated alarm), loopCount=1 per call.
+    // Multiple pulses handled by buzzPattern() calling buzz() in a loop.
+    // Packet layout: [0xAA][len_lo][len_hi][crc8(len)][type=35][seq][cmd][...payload][crc32le(inner)]
+    fun buildHapticPacket4(seq: Byte): ByteArray {
+        val inner = byteArrayOf(
+            PACKET_TYPE_COMMAND, seq, CMD_RUN_HAPTICS_PATTERN,
+            2, 1, 0, 0, 0
+        )
+        val lenBytes = byteArrayOf(
+            (inner.size and 0xFF).toByte(),
+            ((inner.size shr 8) and 0xFF).toByte()
+        )
+        return byteArrayOf(FRAME_MAGIC) + lenBytes + crc8(lenBytes) + inner + crc32Le(inner)
+    }
+
+    // WHOOP 5.0 puffin frame: RUN_HAPTIC_MAVERICK (0x13)
+    // Layout: [0xAA][0x01][declLen_lo][declLen_hi][0x00][0x01][crc16modbus(head)][inner(4-byte aligned)][crc32le(inner)]
+    fun buildHapticPacket5(seq: Byte): ByteArray {
+        val hapticPayload = byteArrayOf(0x01, 47, 152.toByte(), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        val inner0 = byteArrayOf(PACKET_TYPE_COMMAND, seq, CMD_RUN_HAPTIC_MAVERICK) + hapticPayload
+        val pad = (4 - inner0.size % 4) % 4
+        val inner = if (pad == 0) inner0 else inner0 + ByteArray(pad)
+        val declLen = inner.size + 4
+        val head = byteArrayOf(
+            FRAME_MAGIC, 0x01,
+            (declLen and 0xFF).toByte(), ((declLen ushr 8) and 0xFF).toByte(),
+            0x00, 0x01
+        )
+        val c16 = crc16Modbus(head)
+        return head +
+            byteArrayOf((c16 and 0xFF).toByte(), ((c16 ushr 8) and 0xFF).toByte()) +
+            inner + crc32Le(inner)
+    }
+
+    private fun crc16Modbus(data: ByteArray): Int {
+        var crc = 0xFFFF
+        for (b in data) {
+            crc = crc xor (b.toInt() and 0xFF)
+            repeat(8) { crc = if (crc and 0x0001 != 0) (crc ushr 1) xor 0xA001 else crc ushr 1 }
+        }
+        return crc and 0xFFFF
+    }
+}
+```
+
+---
+
+## `BuzzCoordinator.kt`
+
+Deduplication singleton. Prevents both `NotificationListenerService` and `AccessibilityService` from double-firing for the same notification within a 4-second window.
+
+```kotlin
+package com.wbnoti
+
+object BuzzCoordinator {
+    private val recentBuzzes = mutableMapOf<String, Long>()
+    private const val DEDUP_WINDOW_MS = 4000L
+
+    fun claim(pkg: String): Boolean {
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            recentBuzzes.entries.removeIf { now - it.value > DEDUP_WINDOW_MS }
+            val last = recentBuzzes[pkg] ?: 0L
+            return if (now - last > DEDUP_WINDOW_MS) {
+                recentBuzzes[pkg] = now
+                true
+            } else false
+        }
+    }
+}
+```
+
+---
+
+## `WBBleClient.kt`
+
+BLE client managing connection to the WHOOP band.
+
+Key behaviours:
+- On `connect()`: first try stored MAC (from previous session), then bonded devices named "WHOOP*", then BLE scan
+- Stores the verified MAC in `SharedPreferences("wbnoti_ble")` key `whoop_mac` after GATT service discovery confirms it's a real WHOOP
+- Auto-reconnects 5s after unexpected disconnect unless `manualDisconnect = true`
+- 10s connection timeout via `Handler` runnable
+- Detects WHOOP 4.0 vs 5.0 by checking which service UUID is present after service discovery
+- Reads battery level from standard BLE Battery Service (UUID `0000180f...` / `00002a19...`) after connection
+- `buzzPattern(pattern, count)` fires `buzz()` `count` times with 1000ms inter-pulse delay (1500ms for CALENDAR pattern), cancelling any in-flight pattern job first
+- Both the deprecated and API 33+ `onCharacteristicRead` overrides are implemented
+- `@file:Suppress("DEPRECATION")` at top for `connectGatt` which has no public replacement on API 33
+
+```kotlin
+@file:Suppress("DEPRECATION")
+package com.wbnoti
+
+import android.annotation.SuppressLint
+import android.bluetooth.*
+import android.bluetooth.le.*
+import android.content.Context
+import android.os.*
+import android.util.Log
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.util.concurrent.atomic.AtomicInteger
+
+private const val TAG = "WBBleClient"
+
+enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, READY, ERROR }
+enum class BuzzPattern { SMS, CALENDAR }
+
+class WBBleClient(private val context: Context) {
+    private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothAdapter get() = bluetoothManager.adapter
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val bleJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + bleJob)
+    private var patternJob: Job? = null
+    private var reconnectJob: Job? = null
+
+    private val devicePrefs = context.getSharedPreferences("wbnoti_ble", Context.MODE_PRIVATE)
+    private fun storedWhoopMac(): String? = devicePrefs.getString("whoop_mac", null)
+    private fun storeWhoopMac(mac: String) = devicePrefs.edit().putString("whoop_mac", mac).apply()
+
+    @Volatile private var gatt: BluetoothGatt? = null
+    @Volatile private var cmdCharacteristic: BluetoothGattCharacteristic? = null
+    private val seq = AtomicInteger(0)
+    @Volatile private var isWhoop5 = false
+    @Volatile private var manualDisconnect = false
+
+    private val connectionTimeoutRunnable = Runnable {
+        if (_state.value == ConnectionState.CONNECTING || _state.value == ConnectionState.SCANNING) {
+            Log.e(TAG, "Connection timed out")
+            gatt?.close(); gatt = null; cmdCharacteristic = null
+            _state.value = ConnectionState.ERROR
+        }
+    }
+
+    private val _state = MutableStateFlow(ConnectionState.DISCONNECTED)
+    val state: StateFlow<ConnectionState> = _state
+
+    private val _batteryLevel = MutableStateFlow<Int?>(null)
+    val batteryLevel: StateFlow<Int?> = _batteryLevel
+
+    @SuppressLint("MissingPermission")
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val device = result.device
+            val name = try { device.name } catch (e: SecurityException) { null } ?: return
+            if (!name.startsWith("WHOOP")) return
+            bluetoothAdapter.bluetoothLeScanner?.stopScan(this)
+            _state.value = ConnectionState.CONNECTING
+            gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK)
+        }
+        override fun onScanFailed(errorCode: Int) {
+            Log.e(TAG, "Scan failed: $errorCode"); _state.value = ConnectionState.ERROR
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                gatt.close(); this@WBBleClient.gatt = null; cmdCharacteristic = null
+                _batteryLevel.value = null; _state.value = ConnectionState.ERROR
+                if (!manualDisconnect) reconnectJob = scope.launch { delay(5000); connect() }
+                return
+            }
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                gatt.close(); this@WBBleClient.gatt = null; cmdCharacteristic = null
+                _batteryLevel.value = null; _state.value = ConnectionState.DISCONNECTED
+                if (!manualDisconnect) reconnectJob = scope.launch { delay(5000); connect() }
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+            val service5 = gatt.getService(WBProtocol.SERVICE_UUID_5)
+            val service4 = gatt.getService(WBProtocol.SERVICE_UUID)
+            when {
+                service5 != null -> { isWhoop5 = true; cmdCharacteristic = service5.getCharacteristic(WBProtocol.CMD_TO_STRAP_5) }
+                service4 != null -> { isWhoop5 = false; cmdCharacteristic = service4.getCharacteristic(WBProtocol.CMD_TO_STRAP) }
+                else -> return
+            }
+            if (cmdCharacteristic != null) {
+                mainHandler.removeCallbacks(connectionTimeoutRunnable)
+                storeWhoopMac(gatt.device.address)
+                _state.value = ConnectionState.READY
+                val battChar = gatt.getService(WBProtocol.BATTERY_SERVICE_UUID)
+                    ?.getCharacteristic(WBProtocol.BATTERY_LEVEL_UUID)
+                if (battChar != null) gatt.readCharacteristic(battChar)
+            }
+        }
+
+        override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+                characteristic.uuid == WBProtocol.BATTERY_LEVEL_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                _batteryLevel.value = characteristic.value?.firstOrNull()?.toInt()?.and(0xFF)
+            }
+        }
+
+        override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            if (characteristic.uuid == WBProtocol.BATTERY_LEVEL_UUID && status == BluetoothGatt.GATT_SUCCESS) {
+                _batteryLevel.value = value.firstOrNull()?.toInt()?.and(0xFF)
+            }
+        }
+
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            Log.d(TAG, "Write status: $status")
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun connect() {
+        manualDisconnect = false
+        if (_state.value != ConnectionState.DISCONNECTED && _state.value != ConnectionState.ERROR) return
+        mainHandler.removeCallbacks(connectionTimeoutRunnable)
+        mainHandler.postDelayed(connectionTimeoutRunnable, 10_000)
+
+        val storedMac = storedWhoopMac()
+        if (storedMac != null) {
+            _state.value = ConnectionState.CONNECTING
+            gatt = bluetoothAdapter.getRemoteDevice(storedMac)
+                .connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK)
+            return
+        }
+
+        val bonded = bluetoothAdapter.bondedDevices?.firstOrNull { it.name?.startsWith("WHOOP") == true }
+        if (bonded != null) {
+            _state.value = ConnectionState.CONNECTING
+            gatt = bonded.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK)
+            return
+        }
+
+        _state.value = ConnectionState.SCANNING
+        bluetoothAdapter.bluetoothLeScanner?.startScan(
+            emptyList(),
+            ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(),
+            scanCallback
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    fun disconnect() {
+        manualDisconnect = true
+        reconnectJob?.cancel(); reconnectJob = null
+        stopBuzzing()
+        mainHandler.removeCallbacks(connectionTimeoutRunnable)
+        bluetoothAdapter.bluetoothLeScanner?.stopScan(scanCallback)
+        val g = gatt; gatt = null; cmdCharacteristic = null; _batteryLevel.value = null
+        g?.disconnect(); g?.close()
+        _state.value = ConnectionState.DISCONNECTED
+    }
+
+    fun close() { disconnect(); bleJob.cancel() }
+
+    @SuppressLint("MissingPermission")
+    fun buzz() {
+        val characteristic = cmdCharacteristic ?: return
+        if (_state.value != ConnectionState.READY) return
+        val s = (seq.getAndIncrement() and 0xFF).toByte()
+        val packet = if (isWhoop5) WBProtocol.buildHapticPacket5(s) else WBProtocol.buildHapticPacket4(s)
+        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt?.writeCharacteristic(characteristic, packet, writeType)
+        } else {
+            @Suppress("DEPRECATION")
+            characteristic.value = packet
+            characteristic.writeType = writeType
+            @Suppress("DEPRECATION")
+            gatt?.writeCharacteristic(characteristic)
+        }
+    }
+
+    fun buzzPattern(pattern: BuzzPattern, count: Int = 1) {
+        patternJob?.cancel()
+        val interPulseDelay = if (pattern == BuzzPattern.CALENDAR) 1500L else 1000L
+        patternJob = scope.launch {
+            repeat(count.coerceIn(1, 10)) { i ->
+                if (i > 0) delay(interPulseDelay)
+                buzz()
+            }
+        }
+    }
+
+    fun stopBuzzing() { patternJob?.cancel(); patternJob = null }
+}
+```
+
+---
+
+## `PreferencesManager.kt`
+
+Jetpack DataStore (Preferences) wrapper. Persists all user settings.
+
+Keys stored:
+- `calls_enabled`, `sms_enabled`, `whatsapp_enabled`, `slack_enabled`, `calendar_enabled` — Boolean
+- `calls_buzz_count`, `sms_buzz_count`, `whatsapp_buzz_count`, `slack_buzz_count`, `calendar_buzz_count` — Int, coerced 1–10
+- `sms_filter`, `whatsapp_filter`, `slack_filter` — String, default `""`
+- `enabled_packages` — StringSet of package names with buzzing on
+- `pinned_packages` — StringSet of packages promoted to Notification Types section
+- `pinned_package_counts` — StringSet of `"pkg|count"` entries
+
+All values exposed as `Flow<T>`. All setters are `suspend fun`.
+
+```kotlin
+package com.wbnoti
+
+import android.content.Context
+import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+
+private val Context.dataStore by preferencesDataStore("wbnoti_prefs")
+
+class PreferencesManager(private val context: Context) {
+
+    companion object {
+        private val KEY_CALLS_ENABLED = booleanPreferencesKey("calls_enabled")
+        private val KEY_SMS_ENABLED = booleanPreferencesKey("sms_enabled")
+        private val KEY_CALENDAR_ENABLED = booleanPreferencesKey("calendar_enabled")
+        private val KEY_ENABLED_PACKAGES = stringSetPreferencesKey("enabled_packages")
+        private val KEY_PINNED_PACKAGES = stringSetPreferencesKey("pinned_packages")
+        private val KEY_PINNED_COUNTS = stringSetPreferencesKey("pinned_package_counts")
+        private val KEY_CALLS_BUZZ_COUNT = intPreferencesKey("calls_buzz_count")
+        private val KEY_SMS_BUZZ_COUNT = intPreferencesKey("sms_buzz_count")
+        private val KEY_WHATSAPP_ENABLED = booleanPreferencesKey("whatsapp_enabled")
+        private val KEY_WHATSAPP_BUZZ_COUNT = intPreferencesKey("whatsapp_buzz_count")
+        private val KEY_SLACK_ENABLED = booleanPreferencesKey("slack_enabled")
+        private val KEY_SLACK_BUZZ_COUNT = intPreferencesKey("slack_buzz_count")
+        private val KEY_CALENDAR_BUZZ_COUNT = intPreferencesKey("calendar_buzz_count")
+        private val KEY_SMS_FILTER = stringPreferencesKey("sms_filter")
+        private val KEY_WHATSAPP_FILTER = stringPreferencesKey("whatsapp_filter")
+        private val KEY_SLACK_FILTER = stringPreferencesKey("slack_filter")
+    }
+
+    val callsEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_CALLS_ENABLED] ?: true }
+    val smsEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_SMS_ENABLED] ?: true }
+    val whatsappEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_WHATSAPP_ENABLED] ?: true }
+    val slackEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_SLACK_ENABLED] ?: true }
+    val calendarEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_CALENDAR_ENABLED] ?: true }
+    val enabledPackages: Flow<Set<String>> = context.dataStore.data.map { it[KEY_ENABLED_PACKAGES] ?: emptySet() }
+    val pinnedPackages: Flow<Set<String>> = context.dataStore.data.map { it[KEY_PINNED_PACKAGES] ?: emptySet() }
+    val pinnedPackageCounts: Flow<Map<String, Int>> = context.dataStore.data.map { prefs ->
+        (prefs[KEY_PINNED_COUNTS] ?: emptySet()).mapNotNull { entry ->
+            val parts = entry.split("|", limit = 2)
+            if (parts.size == 2) parts[0] to (parts[1].toIntOrNull() ?: 1).coerceIn(1, 10) else null
+        }.toMap()
+    }
+    val callsBuzzCount: Flow<Int> = context.dataStore.data.map { (it[KEY_CALLS_BUZZ_COUNT] ?: 1).coerceIn(1, 10) }
+    val smsBuzzCount: Flow<Int> = context.dataStore.data.map { (it[KEY_SMS_BUZZ_COUNT] ?: 1).coerceIn(1, 10) }
+    val whatsappBuzzCount: Flow<Int> = context.dataStore.data.map { (it[KEY_WHATSAPP_BUZZ_COUNT] ?: 1).coerceIn(1, 10) }
+    val slackBuzzCount: Flow<Int> = context.dataStore.data.map { (it[KEY_SLACK_BUZZ_COUNT] ?: 1).coerceIn(1, 10) }
+    val calendarBuzzCount: Flow<Int> = context.dataStore.data.map { (it[KEY_CALENDAR_BUZZ_COUNT] ?: 1).coerceIn(1, 10) }
+    val smsFilter: Flow<String> = context.dataStore.data.map { it[KEY_SMS_FILTER] ?: "" }
+    val whatsappFilter: Flow<String> = context.dataStore.data.map { it[KEY_WHATSAPP_FILTER] ?: "" }
+    val slackFilter: Flow<String> = context.dataStore.data.map { it[KEY_SLACK_FILTER] ?: "" }
+
+    suspend fun setCallsEnabled(enabled: Boolean) { context.dataStore.edit { it[KEY_CALLS_ENABLED] = enabled } }
+    suspend fun setCallsBuzzCount(count: Int) { context.dataStore.edit { it[KEY_CALLS_BUZZ_COUNT] = count.coerceIn(1, 10) } }
+    suspend fun setSmsEnabled(enabled: Boolean) { context.dataStore.edit { it[KEY_SMS_ENABLED] = enabled } }
+    suspend fun setWhatsappEnabled(enabled: Boolean) { context.dataStore.edit { it[KEY_WHATSAPP_ENABLED] = enabled } }
+    suspend fun setSlackEnabled(enabled: Boolean) { context.dataStore.edit { it[KEY_SLACK_ENABLED] = enabled } }
+    suspend fun setCalendarEnabled(enabled: Boolean) { context.dataStore.edit { it[KEY_CALENDAR_ENABLED] = enabled } }
+    suspend fun setSmsBuzzCount(count: Int) { context.dataStore.edit { it[KEY_SMS_BUZZ_COUNT] = count.coerceIn(1, 10) } }
+    suspend fun setWhatsappBuzzCount(count: Int) { context.dataStore.edit { it[KEY_WHATSAPP_BUZZ_COUNT] = count.coerceIn(1, 10) } }
+    suspend fun setSlackBuzzCount(count: Int) { context.dataStore.edit { it[KEY_SLACK_BUZZ_COUNT] = count.coerceIn(1, 10) } }
+    suspend fun setCalendarBuzzCount(count: Int) { context.dataStore.edit { it[KEY_CALENDAR_BUZZ_COUNT] = count.coerceIn(1, 10) } }
+    suspend fun setSmsFilter(filter: String) { context.dataStore.edit { it[KEY_SMS_FILTER] = filter } }
+    suspend fun setWhatsappFilter(filter: String) { context.dataStore.edit { it[KEY_WHATSAPP_FILTER] = filter } }
+    suspend fun setSlackFilter(filter: String) { context.dataStore.edit { it[KEY_SLACK_FILTER] = filter } }
+
+    suspend fun setPackageEnabled(packageName: String, enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[KEY_ENABLED_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            if (enabled) current.add(packageName) else current.remove(packageName)
+            prefs[KEY_ENABLED_PACKAGES] = current
+        }
+    }
+
+    suspend fun pinPackage(packageName: String) {
+        context.dataStore.edit { prefs ->
+            val pinned = prefs[KEY_PINNED_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            pinned.add(packageName)
+            prefs[KEY_PINNED_PACKAGES] = pinned
+            val enabled = prefs[KEY_ENABLED_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            enabled.add(packageName)
+            prefs[KEY_ENABLED_PACKAGES] = enabled
+            val counts = prefs[KEY_PINNED_COUNTS]?.toMutableSet() ?: mutableSetOf()
+            if (counts.none { it.startsWith("$packageName|") }) counts.add("$packageName|1")
+            prefs[KEY_PINNED_COUNTS] = counts
+        }
+    }
+
+    suspend fun unpinPackage(packageName: String) {
+        context.dataStore.edit { prefs ->
+            val pinned = prefs[KEY_PINNED_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            pinned.remove(packageName)
+            prefs[KEY_PINNED_PACKAGES] = pinned
+            val counts = prefs[KEY_PINNED_COUNTS]?.toMutableSet() ?: mutableSetOf()
+            counts.removeIf { it.startsWith("$packageName|") }
+            prefs[KEY_PINNED_COUNTS] = counts
+        }
+    }
+
+    suspend fun setPinnedPackageCount(packageName: String, count: Int) {
+        context.dataStore.edit { prefs ->
+            val counts = prefs[KEY_PINNED_COUNTS]?.toMutableSet() ?: mutableSetOf()
+            counts.removeIf { it.startsWith("$packageName|") }
+            counts.add("$packageName|${count.coerceIn(1, 10)}")
+            prefs[KEY_PINNED_COUNTS] = counts
+        }
+    }
+}
+```
+
+---
+
+## `NotificationService.kt`
+
+`NotificationListenerService`. The primary notification interception path.
+
+Key behaviours:
+- Runs as a foreground service (`connectedDevice` type) with a silent, min-priority persistent notification
+- Starts a 3-second polling loop on `onCreate()` as a Samsung fallback — Samsung's system blocks some apps (WhatsApp, SMS) from reaching `onNotificationPosted`. The poll loop scans `activeNotifications` for `ALL_MESSAGING_PACKAGES`, deduplicates via a `ConcurrentHashMap`-backed `seenKeys` set (atomic `add()` for check-and-add), and calls `BuzzCoordinator.claim()` before buzzing
+- `onNotificationPosted()`: skips low-priority and `FLAG_ONGOING_EVENT` notifications (except calls); dispatches to `scope.launch { }` on `Dispatchers.IO` to read prefs and buzz
+- Phone call detection via `TelephonyManager`: API 31+ uses `TelephonyCallback`, older uses deprecated `PhoneStateListener`. `CALL_STATE_RINGING` buzzes; `IDLE`/`OFFHOOK` stops buzzing and cancels the ringing job
+- Two top-level helpers: `notificationText(sbn)` extracts `EXTRA_TITLE + EXTRA_TEXT + EXTRA_BIG_TEXT`; `passesFilter(text, filter)` — blank filter passes all, otherwise case-insensitive `contains`
+- Filter applied to SMS, WhatsApp, Slack in both `onNotificationPosted` and the poll loop
+- Companion object exposes `connectionState: StateFlow<ConnectionState>`, `batteryLevel: StateFlow<Int?>`, and `instance`
+
+```kotlin
+@file:Suppress("DEPRECATION")
+package com.wbnoti
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.util.concurrent.ConcurrentHashMap
+
+private const val TAG = "WBNotiSvc"
+
+private fun notificationText(sbn: StatusBarNotification): String {
+    val extras = sbn.notification.extras
+    val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
+    val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+    val big = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+    return "$title $text $big"
+}
+
+private fun passesFilter(text: String, filter: String): Boolean =
+    filter.isBlank() || text.contains(filter.trim(), ignoreCase = true)
+
+class NotificationService : NotificationListenerService() {
+
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + job)
+    private lateinit var prefs: PreferencesManager
+    internal lateinit var bleClient: WBBleClient
+
+    fun buzzPattern(pattern: BuzzPattern, count: Int = 1) = bleClient.buzzPattern(pattern, count)
+    fun stopBuzzing() = bleClient.stopBuzzing()
+
+    private val seenKeys: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private var telephonyManager: TelephonyManager? = null
+    private var telephonyCallback: TelephonyCallback? = null
+    @Suppress("DEPRECATION") private var phoneStateListener: PhoneStateListener? = null
+    private var ringingJob: Job? = null
+
+    private fun handleCallState(state: Int) {
+        when (state) {
+            TelephonyManager.CALL_STATE_RINGING -> {
+                ringingJob?.cancel()
+                ringingJob = scope.launch {
+                    if (prefs.callsEnabled.first()) bleClient.buzzPattern(BuzzPattern.SMS, prefs.callsBuzzCount.first())
+                }
+            }
+            TelephonyManager.CALL_STATE_IDLE, TelephonyManager.CALL_STATE_OFFHOOK -> {
+                ringingJob?.cancel(); ringingJob = null
+                bleClient.stopBuzzing()
+            }
+        }
+    }
+
+    private fun registerTelephonyListener() {
+        telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                    override fun onCallStateChanged(state: Int) = handleCallState(state)
+                }
+                telephonyCallback = cb
+                telephonyManager?.registerTelephonyCallback(mainExecutor, cb)
+            } else {
+                @Suppress("DEPRECATION")
+                val listener = object : PhoneStateListener() {
+                    @Deprecated("Deprecated in Java")
+                    override fun onCallStateChanged(state: Int, phoneNumber: String?) = handleCallState(state)
+                }
+                phoneStateListener = listener
+                @Suppress("DEPRECATION")
+                telephonyManager?.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "READ_PHONE_STATE not granted: ${e.message}")
+        }
+    }
+
+    private fun unregisterTelephonyListener() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            telephonyCallback?.let { telephonyManager?.unregisterTelephonyCallback(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            phoneStateListener?.let {
+                @Suppress("DEPRECATION")
+                telephonyManager?.listen(it, PhoneStateListener.LISTEN_NONE)
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        prefs = PreferencesManager(this)
+        bleClient = WBBleClient(this)
+        registerTelephonyListener()
+        startPolling()
+    }
+
+    private fun startForegroundService() {
+        val channelId = "wbnoti_service"
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel(channelId) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(channelId, "WBNoti", NotificationManager.IMPORTANCE_MIN)
+                    .apply { description = "Running in background to forward notifications to your band" }
+            )
+        }
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("WBNoti active")
+            .setContentText("Forwarding notifications to your band")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(1, notification)
+        }
+    }
+
+    private fun startPolling() {
+        scope.launch {
+            while (true) {
+                delay(3000)
+                try {
+                    val active = activeNotifications ?: continue
+                    for (sbn in active) {
+                        val pkg = sbn.packageName
+                        if (pkg !in ALL_MESSAGING_PACKAGES) continue
+                        if (!seenKeys.add(sbn.key)) continue
+                        val notifText = notificationText(sbn)
+                        val (enabled, count) = when {
+                            pkg in SMS_PACKAGES -> (prefs.smsEnabled.first() && passesFilter(notifText, prefs.smsFilter.first())) to prefs.smsBuzzCount.first()
+                            pkg in WHATSAPP_PACKAGES -> (prefs.whatsappEnabled.first() && passesFilter(notifText, prefs.whatsappFilter.first())) to prefs.whatsappBuzzCount.first()
+                            pkg in SLACK_PACKAGES -> (prefs.slackEnabled.first() && passesFilter(notifText, prefs.slackFilter.first())) to prefs.slackBuzzCount.first()
+                            else -> false to 1
+                        }
+                        if (enabled && BuzzCoordinator.claim(pkg)) bleClient.buzzPattern(BuzzPattern.SMS, count)
+                    }
+                    val activeKeys = active.map { it.key }.toSet()
+                    seenKeys.retainAll(activeKeys)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Poll error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterTelephonyListener()
+        job.cancel()
+        bleClient.close()
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification) {
+        val pkg = sbn.packageName
+        val notification = sbn.notification
+        val isCall = pkg in CALL_PACKAGES || notification.category == Notification.CATEGORY_CALL
+        if (!isCall) {
+            @Suppress("DEPRECATION")
+            if (notification.priority < Notification.PRIORITY_DEFAULT) return
+            if (notification.flags and Notification.FLAG_ONGOING_EVENT != 0) return
+        }
+        if (pkg in ALL_MESSAGING_PACKAGES) seenKeys.add(sbn.key)
+        scope.launch {
+            val enabledPkgs = prefs.enabledPackages.first()
+            val notifText = notificationText(sbn)
+            data class Result(val pattern: BuzzPattern, val count: Int)
+            val result: Result? = when {
+                isCall && pkg in CALL_PACKAGES -> if (prefs.callsEnabled.first()) Result(BuzzPattern.SMS, prefs.callsBuzzCount.first()) else null
+                pkg in SMS_PACKAGES -> if (prefs.smsEnabled.first() && passesFilter(notifText, prefs.smsFilter.first())) Result(BuzzPattern.SMS, prefs.smsBuzzCount.first()) else null
+                pkg in WHATSAPP_PACKAGES -> if (prefs.whatsappEnabled.first() && passesFilter(notifText, prefs.whatsappFilter.first())) Result(BuzzPattern.SMS, prefs.whatsappBuzzCount.first()) else null
+                pkg in SLACK_PACKAGES -> if (prefs.slackEnabled.first() && passesFilter(notifText, prefs.slackFilter.first())) Result(BuzzPattern.SMS, prefs.slackBuzzCount.first()) else null
+                pkg in CALENDAR_PACKAGES -> if (prefs.calendarEnabled.first()) Result(BuzzPattern.CALENDAR, prefs.calendarBuzzCount.first()) else null
+                pkg in prefs.pinnedPackages.first() -> if (pkg in enabledPkgs) Result(BuzzPattern.SMS, prefs.pinnedPackageCounts.first()[pkg] ?: 1) else null
+                pkg in enabledPkgs -> Result(BuzzPattern.SMS, 1)
+                else -> null
+            }
+            if (result != null && BuzzCoordinator.claim(pkg)) bleClient.buzzPattern(result.pattern, result.count)
+        }
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (sbn.packageName in CALL_PACKAGES || sbn.notification.category == Notification.CATEGORY_CALL) {
+            bleClient.stopBuzzing()
+        }
+    }
+
+    companion object {
+        private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+        val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+        private val _batteryLevel = MutableStateFlow<Int?>(null)
+        val batteryLevel: StateFlow<Int?> = _batteryLevel.asStateFlow()
+
+        @Volatile var instance: NotificationService? = null
+            private set
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        instance = this
+        scope.launch { bleClient.state.collect { _connectionState.value = it } }
+        scope.launch { bleClient.batteryLevel.collect { _batteryLevel.value = it } }
+        startForegroundService()
+        bleClient.connect()
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        instance = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+    }
+}
+```
+
+---
+
+## `WBAccessibilityService.kt`
+
+`AccessibilityService` fallback, primarily for Samsung devices.
+
+Key behaviours:
+- Listens only to `TYPE_NOTIFICATION_STATE_CHANGED` events
+- **Critical**: notification text is extracted **synchronously** before `scope.launch { }` because Android recycles `AccessibilityEvent` objects as soon as `onAccessibilityEvent` returns. Inside the coroutine the event data is gone.
+- Text extraction: `event.text.joinToString(" ")` plus `notification?.extras` (`EXTRA_TITLE`, `EXTRA_TEXT`) from `event.parcelableData as? Notification`
+- Inside `scope.launch`: reads filter prefs into local vars first, then applies same filter logic as `NotificationService`
+- Calls `BuzzCoordinator.claim()` before buzzing — prevents double-fire with NLS
+- Only buzzes if `NotificationService.instance` is non-null (so BLE client is available)
+- Call notifications detected via `notification?.category == Notification.CATEGORY_CALL`; call dedup key is `"${pkg}_call"` to be independent from message dedup
+
+```kotlin
+package com.wbnoti
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Notification
+import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+
+private const val TAG = "WBA11y"
+
+class WBAccessibilityService : AccessibilityService() {
+
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + job)
+    private lateinit var prefs: PreferencesManager
+
+    override fun onServiceConnected() {
+        serviceInfo = AccessibilityServiceInfo().apply {
+            eventTypes = AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
+            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            notificationTimeout = 100
+        }
+        prefs = PreferencesManager(applicationContext)
+        instance = this
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        if (event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return
+        val service = NotificationService.instance ?: return
+        val notification = event.parcelableData as? Notification
+        val isCall = notification?.category == Notification.CATEGORY_CALL
+        // Extract text synchronously before the event is recycled by the system
+        val notifText = buildString {
+            append(event.text.joinToString(" "))
+            notification?.extras?.let {
+                append(" "); append(it.getString(Notification.EXTRA_TITLE) ?: "")
+                append(" "); append(it.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "")
+            }
+        }
+        scope.launch {
+            val smsFilter = prefs.smsFilter.first()
+            val whatsappFilter = prefs.whatsappFilter.first()
+            val slackFilter = prefs.slackFilter.first()
+            data class Result(val pattern: BuzzPattern, val count: Int)
+            val result: Result? = when {
+                isCall && pkg in CALL_PACKAGES -> if (prefs.callsEnabled.first()) Result(BuzzPattern.SMS, prefs.callsBuzzCount.first()) else null
+                pkg in SMS_PACKAGES -> if (prefs.smsEnabled.first() && (smsFilter.isBlank() || notifText.contains(smsFilter.trim(), ignoreCase = true))) Result(BuzzPattern.SMS, prefs.smsBuzzCount.first()) else null
+                pkg in WHATSAPP_PACKAGES -> if (prefs.whatsappEnabled.first() && (whatsappFilter.isBlank() || notifText.contains(whatsappFilter.trim(), ignoreCase = true))) Result(BuzzPattern.SMS, prefs.whatsappBuzzCount.first()) else null
+                pkg in SLACK_PACKAGES -> if (prefs.slackEnabled.first() && (slackFilter.isBlank() || notifText.contains(slackFilter.trim(), ignoreCase = true))) Result(BuzzPattern.SMS, prefs.slackBuzzCount.first()) else null
+                pkg in CALENDAR_PACKAGES -> if (prefs.calendarEnabled.first()) Result(BuzzPattern.CALENDAR, prefs.calendarBuzzCount.first()) else null
+                pkg in prefs.pinnedPackages.first() -> {
+                    val enabled = prefs.enabledPackages.first()
+                    if (pkg in enabled) Result(BuzzPattern.SMS, prefs.pinnedPackageCounts.first()[pkg] ?: 1) else null
+                }
+                pkg in prefs.enabledPackages.first() -> Result(BuzzPattern.SMS, 1)
+                else -> null
+            }
+            if (result != null && BuzzCoordinator.claim(if (isCall) "${pkg}_call" else pkg)) {
+                service.buzzPattern(result.pattern, result.count)
+            }
+        }
+    }
+
+    override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        super.onDestroy()
+        job.cancel()
+        instance = null
+    }
+
+    companion object {
+        @Volatile var instance: WBAccessibilityService? = null
+            private set
+    }
+}
+```
+
+---
+
+## `MainActivity.kt`
+
+Jetpack Compose UI. Dark theme only (`darkColorScheme()`).
+
+**`MainViewModel`** (`AndroidViewModel`):
+- StateFlows for all prefs (calls, SMS, WhatsApp, Slack, Calendar enabled/buzzCount, smsFilter, whatsappFilter, slackFilter, enabledPackages, pinnedPackages, pinnedPackageCounts)
+- `installedApps: StateFlow<List<Pair<String,String>>>` — loaded on `Dispatchers.IO` at init, sorted by label, excludes the app's own package + all built-in packages + a few Samsung system apps (`com.samsung.android.keyscafe`, `com.samsung.android.app.routineplus`)
+- Setter functions launch coroutines to write prefs
+
+**`WBNotiApp` composable** (main screen, `LazyColumn`):
+1. App title + version name from `PackageManager`
+2. Error card if notification access not granted → "Grant Access" button → `Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS`
+3. Error card if accessibility access not granted → `Settings.ACTION_ACCESSIBILITY_SETTINGS`
+4. WHOOP connection card: shows state text (Disconnected / Scanning / Connecting / Connected), battery % (colour-coded: red ≤20%, amber ≤40%), Connect/Disconnect button or spinner
+5. "Test Buzz" full-width button (only when READY)
+6. **Notification Types** section heading
+7. `BuzzCountRow` for: Phone Calls, SMS (with filter), WhatsApp (with filter), Slack (with filter), Google Calendar Meetings
+8. Pinned apps as `BuzzCountRow` with a `×` remove button
+9. **Apps** section heading
+10. Per-app rows: label, `↑` pin button, toggle switch
+
+`DisposableEffect` on lifecycle re-checks notification/accessibility grant on `ON_RESUME`.
+
+**`BuzzCountRow` composable**:
+- Card containing: label row (optional `×` remove button, optional `Test` button, toggle switch), buzz count stepper (− / count / +, range 1–10), optional `OutlinedTextField` keyword filter (label "Keyword filter", placeholder "all notifications", `singleLine = true`)
+
+**`ToggleRow` composable**: simple card with label, optional Test button, toggle.
+
+**`getInstalledUserApps`**: queries `ACTION_MAIN / CATEGORY_LAUNCHER`, deduplicates by package, excludes built-in packages, sorts by app label. Annotated `@SuppressLint("QueryAllPackages")`.
+
+**`isNotificationAccessGranted`** / **`isAccessibilityGranted`**: check `Settings.Secure` strings by splitting on `:` and comparing `ComponentName.packageName`.
+
+```kotlin
+package com.wbnoti
+
+import android.Manifest
+import android.app.Application
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+
+// Full implementation: see source files
+```
+
+---
+
+## Unit tests
+
+**`WBProtocolTest`**: verifies frame magic, length encoding, CRC8, opcode bytes, patternId, sequence number, CRC32, and total packet size for both 4.0 and 5.0 packets.
+
+**`BuzzCoordinatorTest`**: verifies first claim returns true, second within window returns false, different packages tracked independently, call key distinct from message key, concurrent claims allow exactly one, and map doesn't grow unboundedly.
+
+---
+
+## `.github/workflows/release.yml`
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release.jks
+      - name: Build release APK
+        run: ./gradlew assembleRelease
+        env:
+          SIGNING_STORE_FILE: release.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+      - name: Upload APK to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/app-release.apk
+```
+
+Triggered by pushing a `v*` tag. Requires four repo secrets: `KEYSTORE_BASE64`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS`, `SIGNING_KEY_PASSWORD`.

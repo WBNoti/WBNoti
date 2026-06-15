@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">WBNoti</string>
+    <string name="accessibility_description">Detects notifications to buzz your WB band</string>
+</resources>

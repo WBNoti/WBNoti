@@ -1,0 +1,19 @@
+# Signing — never commit these
+keystore.jks
+keystore.properties
+
+# Claude Code — exclude entire directory from published repos
+.claude/
+
+# Build outputs
+.gradle/
+build/
+app/build/
+
+# Android Studio
+.idea/
+*.iml
+local.properties
+
+# OS
+.DS_Store
